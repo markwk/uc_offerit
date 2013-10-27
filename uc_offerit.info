@@ -1,0 +1,7 @@
+name = OfferIt
+dependencies[] = uc_order
+dependencies[] = uc_store
+dependencies[] = rules
+
+package = Ubercart - extra
+core = 7.x

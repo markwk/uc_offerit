@@ -1,0 +1,31 @@
+<?php
+
+function uc_offerit_install() {  
+  // add fields to order entity
+  field_create_field(array(
+    'field_name' => 'uc_offerit_transid',
+    'type' => 'text',
+  ));
+  field_create_field(array(
+    'field_name' => 'uc_offerit_offerid',
+    'type' => 'text',
+  ));
+  field_create_instance(array(
+      'field_name' => 'uc_offerit_transid',
+      'entity_type' => 'uc_order',
+      'bundle' => 'uc_order',
+      'label' => 'OfferIt TransID',  
+  ));
+  field_create_instance(array(
+      'field_name' => 'uc_offerit_offerid',
+      'entity_type' => 'uc_order',
+      'bundle' => 'uc_order',
+      'label' => 'OfferIt OfferID',  
+  ));
+}
+
+function uc_offerit_uninstall() {
+  // delete field
+  field_delete_field('uc_offerit_transid');
+  field_delete_field('uc_offerit_offerid');
+}

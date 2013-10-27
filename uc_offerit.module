@@ -1,0 +1,386 @@
+<?php
+
+/*
+ * Implements hook_init
+ * 
+ * Here we add cookie if request have special parameter
+ */
+function uc_offerit_init() {
+  // add 'aff' to cookie
+  if (isset($_REQUEST['aff'])) {
+    $amount_of_time = variable_get('uc_offerit_cookie_expiration_1', 5);
+    switch (variable_get('uc_offerit_cookie_expiration_2', 'hour')) {
+      case 'minute': {
+        $expire = time() + 60 * $amount_of_time;
+        break;
+      }
+      case 'hour': {
+        $expire = time() + 60 * 60 * $amount_of_time;
+        break;
+      }
+      case 'day': {
+        $expire = time() + 60 * 60 * 24 * $amount_of_time;
+        break;
+      }
+    }
+    setcookie('uc_offerit_transid', $_REQUEST['aff'], $expire);
+  }
+  
+  // add 'offerid' cookie
+  if (isset($_REQUEST['offerid'])) {
+    if (!$expire) {
+      $amount_of_time = variable_get('uc_offerit_cookie_expiration_1', 5);
+      switch (variable_get('uc_offerit_cookie_expiration_2', 'hour')) {
+        case 'minute': {
+          $expire = time() + 60 * $amount_of_time;
+          break;
+        }
+        case 'hour': {
+          $expire = time() + 60 * 60 * $amount_of_time;
+          break;
+        }
+        case 'day': {
+          $expire = time() + 60 * 60 * 24 * $amount_of_time;
+          break;
+        }
+      }
+    }
+    setcookie('uc_offerit_offerid', $_REQUEST['offerid'], $expire);
+  }
+}
+
+/*
+ * Implements hook_uc_order
+ */
+function uc_offerit_uc_order($op, &$order, $arg2) {
+  if ($op == 'new') {
+    // save field uc_offerit_transid
+    if (isset($_COOKIE['uc_offerit_transid'])) {
+      $order->uc_offerit_transid[LANGUAGE_NONE][0]['value'] = $_COOKIE['uc_offerit_transid'];
+    }
+    
+    // save field uc_offerit_offerid
+    if (isset($_COOKIE['uc_offerit_offerid'])) {
+      $order->uc_offerit_offerid[LANGUAGE_NONE][0]['value'] = $_COOKIE['uc_offerit_offerid'];
+    }
+  }
+}
+
+/*
+ * Implements hook_menu
+ */
+function uc_offerit_menu() {
+  $items['admin/store/settings/offerit_postback'] = array(
+    'title' => t('OfferIt settings'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array ('uc_offerit_settings_form'),
+    'access arguments' => array ('administer order workflow'),
+    'type' => MENU_NORMAL_ITEM
+  );
+  $items['admin/store/settings/offerit_offerid'] = array(
+    'title' => t('OfferIt offerIDs'),
+    'page callback' => 'uc_offerit_offerid_list',
+    'access arguments' => array ('administer order workflow'),
+    'type' => MENU_NORMAL_ITEM
+  );
+  $items['admin/store/settings/offerit_offerid/%'] = array(
+    'title' => t('OfferID settings'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array ('uc_offerit_offerid_settings_form', 4),
+    'access arguments' => array ('administer order workflow'),
+    'type' => MENU_CALLBACK
+  );
+  $items['admin/store/settings/offerit_offerid/%/delete'] = array(
+    'title' => t('OfferID delete'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array ('uc_offerit_offerid_delete_form', 4),
+    'access arguments' => array ('administer order workflow'),
+    'type' => MENU_CALLBACK
+  );
+  return $items;
+}
+
+/*
+ * Implements hook_permission
+ */
+function uc_offerit_permission() {
+  return array (
+    'administer offerit' => array (
+      'title' => 'Administer offerIt'
+    )
+  );
+}
+
+function uc_offerit_offerid_delete_form($form, $form_state, $offerid) {
+  $form['offerid'] = array (
+    '#type' => 'value', 
+    '#value' => $offerid
+  );
+  return confirm_form($form, 
+    t('Are you sure you want to delete offerid %id?', array('%id' => $offerid)),
+    'admin/store/settings/offerit_offerid',
+    t('This action cannot be undone'),
+    t('Delete'),
+    t('Cancel'));
+}
+
+function uc_offerit_offerid_delete_form_submit($form, &$form_state) {
+  $offerid = $form_state['values']['offerid'];
+  if ($form_state['values']['confirm']) {
+    variable_del('uc_offerit_matching_products_'.$offerid);
+    drupal_set_message(t('OfferID %id has been deleted.', array('%id' => $offerid)));
+  }
+  
+  // change max and min offerid
+  $min = variable_get('uc_offerit_min_offerid', 1000);
+  $max = variable_get('uc_offerit_max_offerid', 0);
+  
+  if ($min == $offerid)
+    variable_set('uc_offerit_min_offerid', $offerid+1);
+  if ($max == $offerid)
+    variable_set('uc_offerit_max_offerid', $offerid-1);
+  
+  $form_state['redirect'] = 'admin/store/settings/offerit_offerid';
+}
+
+/*
+ * List of existing offer ids
+ */
+function uc_offerit_offerid_list() {
+  $min = variable_get('uc_offerit_min_offerid', 0);
+  $max = variable_get('uc_offerit_max_offerid', 1000);
+  $header = array ('OfferID', 'Products', 'Actions');
+  $rows = array();
+  for ($i = $min; $i <= $max; $i++) {
+    $products = variable_get('uc_offerit_matching_products_'.$i, array());
+    if (!empty($products)) {
+      $items = array();
+      foreach ($products as $nid => $product) {
+        $node = node_load($nid);
+        $items[] = l($node->title, 'node/'.$nid);
+      }
+      $prod_cell = theme_item_list(array (
+        'items' => $items,
+        'type' => 'ul'
+      ));
+      $rows[] = array ($i, $prod_cell, 
+          l('Edit', 'admin/store/settings/offerit_offerid/'.$i).' | '.
+          l('Delete', 'admin/store/settings/offerit_offerid/'.$i.'/delete'));
+    }
+  }
+  
+  return theme_table(array (
+      'header' => $header,
+      'rows' => $rows
+  ));
+}
+
+/*
+ * OfferID settings form
+ */
+function uc_offerit_offerid_settings_form($form, $form_state, $offerid) {
+  $form['uc_offerit_offerid'] = array (
+    '#type' => 'value',
+    '#value' => $offerid
+  );
+  $form['uc_offerit_matching_products_'.$offerid] = array (
+    '#type' => 'select',
+    '#title' => t('Matching products for this offerID '.$offerid),
+    '#multiple' => true,
+    '#default_value' => variable_get('uc_offerit_matching_products_'.$offerid),
+    '#options' => uc_offerit_get_products()
+  );
+  $form['submit'] = array (
+    '#type' => 'submit',
+    '#value' => t('Save')
+  );
+  
+  return $form;
+}
+
+function uc_offerit_offerid_settings_form_submit($form, $form_state) {
+  $min = variable_get('uc_offerit_min_offerid', 1000);
+  $max = variable_get('uc_offerit_max_offerid', 0);
+  $offerid = $form_state['values']['uc_offerit_offerid'];
+  
+  // set new max and min offerid. We need it to increase iterations in rule condition and
+  // on page with orderid list
+  if ($min > $offerid)
+    variable_set('uc_offerit_min_offerid', $offerid);
+  if ($max < $offerid)
+    variable_set('uc_offerit_max_offerid', $offerid);
+  
+  variable_set('uc_offerit_matching_products_'.$offerid, 
+          $form_state['values']['uc_offerit_matching_products_'.$offerid]);
+  
+  $form_state['redirect'] = 'admin/store/settings/offerit_offerid';
+}
+
+/*
+ * Get list of all products
+ */
+function uc_offerit_get_products() {
+  $products = array();
+  try
+    {
+      $query = db_select('uc_products','p');
+      $query->innerJoin('node', 'n', 'n.nid = p.nid');
+      $query->fields('n')
+            ->fields('p')
+            ->condition('n.status', 1, '=');
+        
+      $result = $query->execute();
+      while($row = $result->fetchObject())
+      {
+        $products[$row->nid] = $row->title;
+      }
+      return $products;
+    }
+    catch(Exception $e)
+    {
+        //Catch the exceptions
+        return $products;
+    }
+}
+
+/*
+ * OfferIt settings form
+ */
+function uc_offerit_settings_form() {
+  $form['postback_settings'] = array (
+    '#type' => 'fieldset',
+    '#title' => t('Postback URL settings')
+  );
+  $form['postback_settings']['uc_offerit_postback'] = array (
+    '#type' => 'textfield',
+    '#title' => t('Postback URL'),
+    '#description' => t("URL must be like 'site-name.com' or 'www.site-name.com'".
+        " without path and protocol name"),
+    '#default_value' => variable_get('uc_offerit_postback', '')
+  );
+  $form['postback_settings']['uc_offerit_send_transid'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Send Transaction ID'),
+    '#default_value' => variable_get('uc_offerit_send_transid', 1)
+  );
+  $form['postback_settings']['uc_offerit_send_orderid'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Send Order ID'),
+    '#default_value' => variable_get('uc_offerit_send_orderid', 1),
+  );
+  $form['postback_settings']['uc_offerit_send_userid'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Send User ID'),
+    '#default_value' => variable_get('uc_offerit_send_userid', 1)
+  );
+  $form['postback_settings']['uc_offerit_send_revenue'] = array (
+    '#type' => 'checkbox',
+    '#title' => t('Send Revenue'),
+    '#default_value' => variable_get('uc_offerit_send_revenue', 1)
+  );
+  $form['postback_settings']['uc_offerit_send_gross'] = array (
+    '#type' => 'checkbox',
+    '#title' => t('Send Gross'),
+    '#default_value' => variable_get('uc_offerit_send_gross', 1)
+  );
+  
+  $form['other_settings'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Other')
+  );
+  $form['other_settings']['uc_offerit_cookie_expiration_1'] = array (
+    '#type' => 'textfield',
+    '#title' => t('Cookie expires after'),
+    '#default_value' => variable_get('uc_offerit_cookie_expiration_1', 5)
+  );
+  $form['other_settings']['uc_offerit_cookie_expiration_2'] = array (
+    '#type' => 'select',
+    '#title' => t(''),
+    '#options' => array (
+      'minute' => t('Minutes'),
+      'hour' => t('Hours'),
+      'day' => t('Days'),
+    ),
+    '#default_value' => variable_get('uc_offerit_cookie_expiration_2', 'hour')
+  );
+  return system_settings_form($form);
+}
+
+/*
+ * Validate settings form
+ */
+function uc_offerit_settings_form_validate($form, $form_state) {
+  if (!is_numeric($form_state['values']['uc_offerit_cookie_expiration_1'])) {
+    form_set_error('uc_offerit_cookie_expiration_1', t('Expiration time must be numeric value.'));
+  }
+}
+
+/*
+ * Get array of nids of matching products for given order.
+ * If there is no offerid or matching products it return empty array
+ */
+function uc_offerit_get_matching_products($order) {
+  $offerid = field_get_items('uc_order', $order, 'uc_offerit_offerid');
+  if (empty($offerid))
+    return array();
+  $offerid = $offerid[0]['value'];
+  
+  $matching_products = variable_get('uc_offerit_matching_products_'.$offerid, array());
+  if (empty($matching_products))
+    return array();
+  
+  $result = array();
+  foreach ($order->products as $id => $order_product) {
+    foreach ($matching_products as $nid => $matching_product) {
+      if ($order_product->nid == $nid) {
+        $result[] = $nid;
+      }
+    }
+  }
+  
+  return $result;
+}
+
+/*
+ * Create postback URL
+ * 
+ * @param $order
+ *     Ubercart order object
+ * 
+ * @return
+ *     If uc_offerit_transid  or postback are empty return postback empty string,
+ *     otherwise return postback URL.
+ */
+function uc_offerit_create_postback_url($order) {
+  $transid = field_get_items('uc_order', $order, 'uc_offerit_transid');
+  $postback = variable_get('uc_offerit_postback', '');
+  if (!empty($transid) && $postback) {
+    $url = 'http://'.$postback.
+          '/signup/process_pixel.php';
+    $query = array();
+    if (variable_get('uc_offerit_send_transid', 1)) {
+      $query['transid'] = $transid[0]['value'];
+    }
+    if (variable_get('uc_offerit_send_orderid', 1)) {
+      $query['orderid'] = $order->order_id;
+    }
+    if (variable_get('uc_offerit_send_subid', 1)) {
+      $query['subid'] = $order->uid;
+    }
+    if (variable_get('uc_offerit_send_revenue', 1)) {
+      $query['revenue'] = uc_order_get_total($order);
+    }
+    if (variable_get('uc_offerit_send_gross', 1)) {
+      $gross = 0.00;
+      $nids = uc_offerit_get_matching_products($order);
+      $products = node_load_multiple($nids);
+      foreach ($products as $product) {
+        $gross += $product->sell_price;
+      }
+      $query['gross'] = $gross;
+    }
+    return url($url, array('query' => $query));
+  }
+  else
+    return '';
+}
